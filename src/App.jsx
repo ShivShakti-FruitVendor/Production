@@ -42,7 +42,7 @@ const baseProducts = [
     unit: "1 Dozen",
     price: 800,
     category: "fruit",
-    image: "/Users/jayneel/Documents/ShivShakti/public/Mango.png",
+    image: "/mango.png",
     badge: "Seasonal",
     rating: 4.9,
     description: "Premium Ratnagiri Alphonso mangoes, hand-picked at peak ripeness. Known as the 'King of Mangoes' for their rich, creamy texture and intense sweetness with notes of honey and citrus.",
@@ -435,14 +435,33 @@ function HomeView({ setView, onAddToCart, cart, onProductClick }) {
   const vegetables = PRODUCTS.filter((p) => p.category === "vegetable");
 
   /* ── Scroll-hijack zoom hero ── */
-  const SCROLL_DISTANCE    = 600;
+  const isMobile           = typeof window !== "undefined" ? window.innerWidth <= 768 : false;
+  const SCROLL_DISTANCE    = isMobile ? 280 : 600;
+  const TOUCH_DAMPEN       = .95;
   const heroRef            = useRef(null);
   const productsSectionRef = useRef(null);
   const accumulatorRef     = useRef(0);
   const hijackActive       = useRef(true);
   const touchStartRef      = useRef(0);
+  const touchOriginRef     = useRef(0);
   const hasScrolledThrough = useRef(false);
+  const isProgrammaticScroll = useRef(false);
   const [progress, setProgress] = useState(0);
+
+  const [viewportSize, setViewportSize] = useState({ 
+    w: typeof window !== "undefined" ? window.innerWidth : 1200, 
+    h: typeof window !== "undefined" ? window.innerHeight : 800 
+  });
+
+  useEffect(() => {
+    const update = () => setViewportSize({ 
+      w: window.innerWidth, 
+      h: window.innerHeight 
+    });
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
 
   // Wheel + touch hijack on the hero element
   useEffect(() => {
@@ -461,57 +480,166 @@ function HomeView({ setView, onAddToCart, cart, onProductClick }) {
       if (p >= 1 && !hasScrolledThrough.current) {
         hijackActive.current = false;
         hasScrolledThrough.current = true;
+        isProgrammaticScroll.current = true;
         setTimeout(() => {
-          productsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+          if (productsSectionRef.current) {
+            productsSectionRef.current.scrollIntoView({ 
+              behavior: 'smooth', 
+              block: 'start' 
+            });
+          }
+          setTimeout(() => {
+            isProgrammaticScroll.current = false;
+          }, 800);
         }, 80);
       }
       if (p < 1 && !hijackActive.current && window.scrollY === 0) {
         hijackActive.current = true;
         hasScrolledThrough.current = false;
       }
+    };
+
+    // ── Mobile-only velocity tracking refs (plain objects, not React refs, ──
+    // ── to avoid stale closure issues inside the effect) ──────────────────
+    const lastTouchY    = { current: 0 };
+    const lastTouchTime = { current: 0 };
+    const swipeVelocity = { current: 0 };
+
+    // ── autoCompleteHero: smooth rAF animation from current → 1 ──────────
+    const autoCompleteHero = () => {
+      hijackActive.current = false;
+      const startProgress = accumulatorRef.current / SCROLL_DISTANCE;
+      const startTime = performance.now();
+      const duration = 400; // ms
+
+      const animate = (now) => {
+        const elapsed = now - startTime;
+        const t = Math.min(elapsed / duration, 1);
+        const eased = t < 0.5 ? 2*t*t : -1+(4-2*t)*t; // ease-in-out
+        const newProgress = startProgress + (1 - startProgress) * eased;
+
+        accumulatorRef.current = newProgress * SCROLL_DISTANCE;
+        setProgress(newProgress);
+
+        if (t < 1) {
+          requestAnimationFrame(animate);
+        } else {
+          if (!hasScrolledThrough.current) {
+            hasScrolledThrough.current = true;
+            isProgrammaticScroll.current = true;
+            setTimeout(() => {
+              if (productsSectionRef.current) {
+                productsSectionRef.current.scrollIntoView({ 
+                  behavior: 'smooth', 
+                  block: 'start' 
+                });
+              }
+              setTimeout(() => { 
+                isProgrammaticScroll.current = false; 
+              }, 800);
+            }, 80);
+          }
+        }
+      };
+      requestAnimationFrame(animate);
+    };
+
+    // ── autoRevertHero: snap back to 0 on abandoned swipe ────────────────
+    const autoRevertHero = () => {
+      const startProgress = accumulatorRef.current / SCROLL_DISTANCE;
+      const startTime = performance.now();
+      const duration = 300; // ms
+
+      const animate = (now) => {
+        const elapsed = now - startTime;
+        const t = Math.min(elapsed / duration, 1);
+        const eased = 1 - (1 - t) * (1 - t); // ease-out
+        const newProgress = startProgress * (1 - eased);
+
+        accumulatorRef.current = newProgress * SCROLL_DISTANCE;
+        setProgress(newProgress);
+
+        if (t < 1) {
+          requestAnimationFrame(animate);
+        } else {
+          accumulatorRef.current = 0;
+          setProgress(0);
+          hijackActive.current = true; // re-enable touch input
+        }
+      };
+      requestAnimationFrame(animate);
     };
 
     const handleTouchStart = (e) => {
-      touchStartRef.current = e.touches[0].clientY;
+      touchOriginRef.current   = e.touches[0].clientY;
+      touchStartRef.current    = e.touches[0].clientY;
+      lastTouchY.current       = e.touches[0].clientY;
+      lastTouchTime.current    = Date.now();
+      swipeVelocity.current    = 0;
     };
 
     const handleTouchMove = (e) => {
-      const delta = touchStartRef.current - e.touches[0].clientY;
-      if (!hijackActive.current && (window.scrollY > 0 || delta > 0)) return;
-      touchStartRef.current = e.touches[0].clientY;
+      const cumulativeDelta = (touchOriginRef.current - e.touches[0].clientY) * TOUCH_DAMPEN;
+      if (!hijackActive.current && (window.scrollY > 0 || cumulativeDelta > 0)) return;
       e.preventDefault();
-      accumulatorRef.current = Math.min(
-        Math.max(accumulatorRef.current + delta, 0),
-        SCROLL_DISTANCE
-      );
-      const p = accumulatorRef.current / SCROLL_DISTANCE;
+
+      // Track instantaneous velocity (px/ms, downward swipe = positive)
+      const now = Date.now();
+      const timeDelta = now - lastTouchTime.current;
+      if (timeDelta > 0) {
+        swipeVelocity.current = (lastTouchY.current - e.touches[0].clientY) / timeDelta;
+      }
+      lastTouchY.current    = e.touches[0].clientY;
+      lastTouchTime.current = now;
+
+      const newAccumulator = Math.min(Math.max(cumulativeDelta, 0), SCROLL_DISTANCE);
+      accumulatorRef.current = newAccumulator;
+
+      const p = newAccumulator / SCROLL_DISTANCE;
       setProgress(p);
+
+      // If accumulator hits max during move (e.g. very slow deliberate drag), auto-complete
       if (p >= 1 && !hasScrolledThrough.current) {
-        hijackActive.current = false;
-        hasScrolledThrough.current = true;
-        setTimeout(() => {
-          productsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-        }, 80);
+        autoCompleteHero();
       }
       if (p < 1 && !hijackActive.current && window.scrollY === 0) {
         hijackActive.current = true;
         hasScrolledThrough.current = false;
+      }
+    };
+
+    // ── touchend: snap-forward or snap-back based on position + velocity ──
+    const handleTouchEnd = () => {
+      if (!isMobile) return;
+      const p        = accumulatorRef.current / SCROLL_DISTANCE;
+      const velocity = swipeVelocity.current; // px/ms, downward positive
+
+      const isCommitted = p >= 0.5;                   // passed halfway mark
+      const isFlick     = velocity > 0.4 && p > 0.15; // fast flick with minimal travel
+
+      if ((isCommitted || isFlick) && !hasScrolledThrough.current) {
+        autoCompleteHero();
+      } else if (p > 0) {
+        autoRevertHero();
       }
     };
 
     el.addEventListener("wheel",      handleWheel,      { passive: false });
     el.addEventListener("touchstart", handleTouchStart, { passive: true  });
     el.addEventListener("touchmove",  handleTouchMove,  { passive: false });
+    el.addEventListener("touchend",   handleTouchEnd,   { passive: true  });
     return () => {
       el.removeEventListener("wheel",      handleWheel);
       el.removeEventListener("touchstart", handleTouchStart);
       el.removeEventListener("touchmove",  handleTouchMove);
+      el.removeEventListener("touchend",   handleTouchEnd);
     };
   }, []);
 
   // Re-engage hijack when user scrolls back to very top
   useEffect(() => {
     const handleWindowScroll = () => {
+      if (isProgrammaticScroll.current) return;
       const heroHeight = heroRef.current?.offsetHeight || window.innerHeight;
       if (window.scrollY < heroHeight * 0.5) {
         if (!hijackActive.current) {
@@ -533,9 +661,7 @@ function HomeView({ setView, onAddToCart, cart, onProductClick }) {
   const easeInOut = (t) => t < 0.5 ? 2*t*t : -1+(4-2*t)*t;
 
   const ep = easeInOut(progress);
-  const maxDim = typeof window !== "undefined"
-    ? Math.max(window.innerWidth, window.innerHeight) * 1.1
-    : 1200;
+  const maxDim = Math.max(viewportSize.w, viewportSize.h) * 1.1;
   const imgSize        = lerp(220, maxDim, ep);
   const imgRadius      = lerp(50, 0, ep);
   const bgR            = Math.round(lerp(18,  124, ep));
@@ -552,7 +678,7 @@ function HomeView({ setView, onAddToCart, cart, onProductClick }) {
       <section
         ref={heroRef}
         className="relative overflow-hidden flex items-center justify-center"
-        style={{ height: "100vh", background: bgColor, transition: "none", touchAction: "none" }}
+        style={{ height: "100dvh", minHeight: "-webkit-fill-available", background: bgColor, transition: "none", touchAction: "none" }}
       >
         {/* Warm radial glow — behind the mango, fades as it zooms */}
         <div
@@ -574,8 +700,10 @@ function HomeView({ setView, onAddToCart, cart, onProductClick }) {
 
         {/* Fruit image — circle → fullscreen */}
         <img
-          src="/public/Mango.png"
+          src="/mango.png"
           alt="Fresh Alphonso Mangoes"
+          loading="eager"
+          fetchPriority="high"
           style={{
             position: "absolute",
             width:  imgSize,

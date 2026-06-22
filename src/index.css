@@ -103,7 +103,10 @@
 @layer base {
   *, *::before, *::after { box-sizing: border-box; }
 
-  html { scroll-behavior: smooth; }
+  html {
+    scroll-behavior: smooth;
+    height: -webkit-fill-available;
+  }
 
   body {
     font-family: "Outfit", sans-serif;
@@ -112,6 +115,7 @@
     overflow-x: hidden;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    height: -webkit-fill-available;
   }
 
   /* Selection highlight */
