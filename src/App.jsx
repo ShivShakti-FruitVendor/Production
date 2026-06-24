@@ -32,6 +32,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import fruitsData from "./data/fruits.js";
+import { lenis } from "./main.jsx";
 
 /* ─────────────────────────────── MOCK DATA ─────────────────────────────── */
 
@@ -429,230 +430,60 @@ const HOME_PICKS = (() => {
   return merged.slice(0, 6);
 })();
 
+/* ──── Scroll-reveal hook (IntersectionObserver, animate once) ──── */
+function useRevealOnScroll(selector) {
+  useEffect(() => {
+    const elements = document.querySelectorAll(selector);
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('is-visible');
+            observer.unobserve(entry.target); // animate once only
+          }
+        });
+      },
+      { threshold: 0.15, rootMargin: '0px 0px -40px 0px' }
+    );
+    elements.forEach((el) => observer.observe(el));
+    return () => observer.disconnect();
+  }, []);
+}
+
 function HomeView({ setView, onAddToCart, cart, onProductClick }) {
   const isInCart = (id) => cart.some((c) => c.id === id);
   const fruits = PRODUCTS.filter((p) => p.category === "fruit");
   const vegetables = PRODUCTS.filter((p) => p.category === "vegetable");
 
-  /* ── Scroll-hijack zoom hero ── */
-  const isMobile           = typeof window !== "undefined" ? window.innerWidth <= 768 : false;
-  const SCROLL_DISTANCE    = isMobile ? 280 : 600;
-  const TOUCH_DAMPEN       = .95;
-  const heroRef            = useRef(null);
+  /* ── Lenis-driven zoom hero (sticky + scroll container) ── */
+  const heroRef = useRef(null);
+  const heroScrollContainerRef = useRef(null);
   const productsSectionRef = useRef(null);
-  const accumulatorRef     = useRef(0);
-  const hijackActive       = useRef(true);
-  const touchStartRef      = useRef(0);
-  const touchOriginRef     = useRef(0);
-  const hasScrolledThrough = useRef(false);
-  const isProgrammaticScroll = useRef(false);
   const [progress, setProgress] = useState(0);
 
-  const [viewportSize, setViewportSize] = useState({ 
-    w: typeof window !== "undefined" ? window.innerWidth : 1200, 
-    h: typeof window !== "undefined" ? window.innerHeight : 800 
+  const [vpSize, setVpSize] = useState({
+    w: typeof window !== "undefined" ? window.innerWidth  : 1200,
+    h: typeof window !== "undefined" ? window.innerHeight : 800,
   });
 
   useEffect(() => {
-    const update = () => setViewportSize({ 
-      w: window.innerWidth, 
-      h: window.innerHeight 
-    });
-    update();
-    window.addEventListener('resize', update);
-    return () => window.removeEventListener('resize', update);
+    const onResize = () => setVpSize({ w: window.innerWidth, h: window.innerHeight });
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // Wheel + touch hijack on the hero element
+  // Drive hero zoom animation from Lenis scroll position within the tall container
   useEffect(() => {
-    const el = heroRef.current;
-    if (!el) return;
-
-    const handleWheel = (e) => {
-      if (!hijackActive.current && (window.scrollY > 0 || e.deltaY > 0)) return;
-      e.preventDefault();
-      accumulatorRef.current = Math.min(
-        Math.max(accumulatorRef.current + e.deltaY, 0),
-        SCROLL_DISTANCE
-      );
-      const p = accumulatorRef.current / SCROLL_DISTANCE;
+    const onScroll = ({ scroll }) => {
+      if (!heroScrollContainerRef.current) return;
+      const containerHeight = heroScrollContainerRef.current.offsetHeight; // 200dvh
+      const heroHeight = window.innerHeight;                                // 100dvh
+      const scrollableDistance = containerHeight - heroHeight;              // 100dvh
+      const p = Math.min(Math.max(scroll / scrollableDistance, 0), 1);
       setProgress(p);
-      if (p >= 1 && !hasScrolledThrough.current) {
-        hijackActive.current = false;
-        hasScrolledThrough.current = true;
-        isProgrammaticScroll.current = true;
-        setTimeout(() => {
-          if (productsSectionRef.current) {
-            productsSectionRef.current.scrollIntoView({ 
-              behavior: 'smooth', 
-              block: 'start' 
-            });
-          }
-          setTimeout(() => {
-            isProgrammaticScroll.current = false;
-          }, 800);
-        }, 80);
-      }
-      if (p < 1 && !hijackActive.current && window.scrollY === 0) {
-        hijackActive.current = true;
-        hasScrolledThrough.current = false;
-      }
     };
-
-    // ── Mobile-only velocity tracking refs (plain objects, not React refs, ──
-    // ── to avoid stale closure issues inside the effect) ──────────────────
-    const lastTouchY    = { current: 0 };
-    const lastTouchTime = { current: 0 };
-    const swipeVelocity = { current: 0 };
-
-    // ── autoCompleteHero: smooth rAF animation from current → 1 ──────────
-    const autoCompleteHero = () => {
-      hijackActive.current = false;
-      const startProgress = accumulatorRef.current / SCROLL_DISTANCE;
-      const startTime = performance.now();
-      const duration = 400; // ms
-
-      const animate = (now) => {
-        const elapsed = now - startTime;
-        const t = Math.min(elapsed / duration, 1);
-        const eased = t < 0.5 ? 2*t*t : -1+(4-2*t)*t; // ease-in-out
-        const newProgress = startProgress + (1 - startProgress) * eased;
-
-        accumulatorRef.current = newProgress * SCROLL_DISTANCE;
-        setProgress(newProgress);
-
-        if (t < 1) {
-          requestAnimationFrame(animate);
-        } else {
-          if (!hasScrolledThrough.current) {
-            hasScrolledThrough.current = true;
-            isProgrammaticScroll.current = true;
-            setTimeout(() => {
-              if (productsSectionRef.current) {
-                productsSectionRef.current.scrollIntoView({ 
-                  behavior: 'smooth', 
-                  block: 'start' 
-                });
-              }
-              setTimeout(() => { 
-                isProgrammaticScroll.current = false; 
-              }, 800);
-            }, 80);
-          }
-        }
-      };
-      requestAnimationFrame(animate);
-    };
-
-    // ── autoRevertHero: snap back to 0 on abandoned swipe ────────────────
-    const autoRevertHero = () => {
-      const startProgress = accumulatorRef.current / SCROLL_DISTANCE;
-      const startTime = performance.now();
-      const duration = 300; // ms
-
-      const animate = (now) => {
-        const elapsed = now - startTime;
-        const t = Math.min(elapsed / duration, 1);
-        const eased = 1 - (1 - t) * (1 - t); // ease-out
-        const newProgress = startProgress * (1 - eased);
-
-        accumulatorRef.current = newProgress * SCROLL_DISTANCE;
-        setProgress(newProgress);
-
-        if (t < 1) {
-          requestAnimationFrame(animate);
-        } else {
-          accumulatorRef.current = 0;
-          setProgress(0);
-          hijackActive.current = true; // re-enable touch input
-        }
-      };
-      requestAnimationFrame(animate);
-    };
-
-    const handleTouchStart = (e) => {
-      touchOriginRef.current   = e.touches[0].clientY;
-      touchStartRef.current    = e.touches[0].clientY;
-      lastTouchY.current       = e.touches[0].clientY;
-      lastTouchTime.current    = Date.now();
-      swipeVelocity.current    = 0;
-    };
-
-    const handleTouchMove = (e) => {
-      const cumulativeDelta = (touchOriginRef.current - e.touches[0].clientY) * TOUCH_DAMPEN;
-      if (!hijackActive.current && (window.scrollY > 0 || cumulativeDelta > 0)) return;
-      e.preventDefault();
-
-      // Track instantaneous velocity (px/ms, downward swipe = positive)
-      const now = Date.now();
-      const timeDelta = now - lastTouchTime.current;
-      if (timeDelta > 0) {
-        swipeVelocity.current = (lastTouchY.current - e.touches[0].clientY) / timeDelta;
-      }
-      lastTouchY.current    = e.touches[0].clientY;
-      lastTouchTime.current = now;
-
-      const newAccumulator = Math.min(Math.max(cumulativeDelta, 0), SCROLL_DISTANCE);
-      accumulatorRef.current = newAccumulator;
-
-      const p = newAccumulator / SCROLL_DISTANCE;
-      setProgress(p);
-
-      // If accumulator hits max during move (e.g. very slow deliberate drag), auto-complete
-      if (p >= 1 && !hasScrolledThrough.current) {
-        autoCompleteHero();
-      }
-      if (p < 1 && !hijackActive.current && window.scrollY === 0) {
-        hijackActive.current = true;
-        hasScrolledThrough.current = false;
-      }
-    };
-
-    // ── touchend: snap-forward or snap-back based on position + velocity ──
-    const handleTouchEnd = () => {
-      if (!isMobile) return;
-      const p        = accumulatorRef.current / SCROLL_DISTANCE;
-      const velocity = swipeVelocity.current; // px/ms, downward positive
-
-      const isCommitted = p >= 0.5;                   // passed halfway mark
-      const isFlick     = velocity > 0.4 && p > 0.15; // fast flick with minimal travel
-
-      if ((isCommitted || isFlick) && !hasScrolledThrough.current) {
-        autoCompleteHero();
-      } else if (p > 0) {
-        autoRevertHero();
-      }
-    };
-
-    el.addEventListener("wheel",      handleWheel,      { passive: false });
-    el.addEventListener("touchstart", handleTouchStart, { passive: true  });
-    el.addEventListener("touchmove",  handleTouchMove,  { passive: false });
-    el.addEventListener("touchend",   handleTouchEnd,   { passive: true  });
-    return () => {
-      el.removeEventListener("wheel",      handleWheel);
-      el.removeEventListener("touchstart", handleTouchStart);
-      el.removeEventListener("touchmove",  handleTouchMove);
-      el.removeEventListener("touchend",   handleTouchEnd);
-    };
-  }, []);
-
-  // Re-engage hijack when user scrolls back to very top
-  useEffect(() => {
-    const handleWindowScroll = () => {
-      if (isProgrammaticScroll.current) return;
-      const heroHeight = heroRef.current?.offsetHeight || window.innerHeight;
-      if (window.scrollY < heroHeight * 0.5) {
-        if (!hijackActive.current) {
-          hijackActive.current = true;
-          hasScrolledThrough.current = false;
-          accumulatorRef.current = 0;
-          setProgress(0);
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }
-      }
-    };
-    window.addEventListener("scroll", handleWindowScroll);
-    return () => window.removeEventListener("scroll", handleWindowScroll);
+    lenis.on('scroll', onScroll);
+    return () => lenis.off('scroll', onScroll);
   }, []);
 
   // Interpolation helpers
@@ -661,7 +492,7 @@ function HomeView({ setView, onAddToCart, cart, onProductClick }) {
   const easeInOut = (t) => t < 0.5 ? 2*t*t : -1+(4-2*t)*t;
 
   const ep = easeInOut(progress);
-  const maxDim = Math.max(viewportSize.w, viewportSize.h) * 1.1;
+  const maxDim = Math.max(vpSize.w, vpSize.h) * 1.1;
   const imgSize        = lerp(220, maxDim, ep);
   const imgRadius      = lerp(50, 0, ep);
   const bgR            = Math.round(lerp(18,  124, ep));
@@ -672,15 +503,40 @@ function HomeView({ setView, onAddToCart, cart, onProductClick }) {
   const scrollCueOpacity = clamp(1 - progress / 0.25, 0, 1);
   const badgeOpacity   = clamp((progress - 0.5) / 0.35, 0, 1);
 
+  // Product reveal interpolations — blur + translate + fade as mango fades
+  const productRevealStart = 0.55;
+  const productRevealEnd = 1.0;
+  const productT = clamp(
+    (progress - productRevealStart) / (productRevealEnd - productRevealStart),
+    0, 1
+  );
+  const productEased = productT < 0.5 ? 2*productT*productT : -1+(4-2*productT)*productT;
+  const productOpacity = productEased;
+  const productBlur = lerp(28, 0, productEased);
+  const productTranslateY = lerp(80, 0, productEased);
+
   return (
     <div className="relative min-h-screen bg-surface">
-      {/* ── Scroll-hijack Zoom Hero ── */}
-      <section
-        ref={heroRef}
-        className="relative overflow-hidden flex items-center justify-center"
-        style={{ height: "100dvh", minHeight: "-webkit-fill-available", background: bgColor, transition: "none", touchAction: "none" }}
+      {/* ── Sticky Hero Scroll Container (200dvh) ── */}
+      <div
+        ref={heroScrollContainerRef}
+        className="hero-scroll-container"
+        style={{ height: '200dvh' }}
       >
-        {/* Warm radial glow — behind the mango, fades as it zooms */}
+        <section
+          ref={heroRef}
+          className="relative overflow-hidden flex items-center justify-center"
+          style={{
+            position: 'sticky',
+            top: 0,
+            height: '100dvh',
+            minHeight: '-webkit-fill-available',
+            overflow: 'hidden',
+            background: bgColor,
+            transition: 'none',
+          }}
+        >
+        {/* Warm radial glow — follows mango, rises from bottom */}
         <div
           style={{
             position: "absolute",
@@ -688,8 +544,9 @@ function HomeView({ setView, onAddToCart, cart, onProductClick }) {
             height: imgSize * 0.85,
             borderRadius: "50%",
             left: "50%",
-            top:  "50%",
-            transform: "translate(-50%,-50%)",
+            top: lerp(vpSize.h, vpSize.h / 2, ep) - (imgSize * 0.85) / 2,
+            bottom: "auto",
+            transform: "translateX(-50%)",
             background: "radial-gradient(circle, rgba(251,191,36,0.35) 0%, transparent 70%)",
             opacity: 1 - ep,
             transition: "none",
@@ -698,7 +555,7 @@ function HomeView({ setView, onAddToCart, cart, onProductClick }) {
           }}
         />
 
-        {/* Fruit image — circle → fullscreen */}
+        {/* Fruit image — half-peeps from bottom, rises + zooms to fullscreen */}
         <img
           src="/mango.png"
           alt="Fresh Alphonso Mangoes"
@@ -711,25 +568,48 @@ function HomeView({ setView, onAddToCart, cart, onProductClick }) {
             borderRadius: `${imgRadius}%`,
             objectFit: "cover",
             left: "50%",
-            top:  "50%",
-            transform: "translate(-50%,-50%)",
+            top: lerp(vpSize.h, vpSize.h / 2, ep) - imgSize / 2,
+            bottom: "auto",
+            transform: "translateX(-50%)",
+            opacity: progress < 0.7 ? 1 : 1 - ((progress - 0.7) / 0.3),
             filter: `drop-shadow(0 0 18px rgba(251,191,36,${(0.9 * (1 - ep)).toFixed(3)})) drop-shadow(0 0 6px rgba(255,160,0,${(0.7 * (1 - ep)).toFixed(3)}))`,
             transition: "none",
             userSelect: "none",
             pointerEvents: "none",
             zIndex: 2,
+            willChange: 'transform, opacity, filter',
           }}
         />
 
-        {/* Headline — fades out in first 40% of scroll */}
+        {/* Headline — true-center, big, clears navbar */}
         <div
-          className="absolute inset-0 flex flex-col items-center justify-end pb-48 z-10 text-center px-6"
-          style={{ opacity: headlineOpacity, transition: "none" }}
+          className="absolute inset-x-0 top-0 flex flex-col items-center justify-center z-10 text-center px-6 gap-3"
+          style={{
+            opacity: headlineOpacity,
+            transition: 'none',
+            height: '55%',       // upper 55% so it never overlaps the mango
+            paddingTop: '72px',  // clears the fixed navbar
+          }}
         >
-          <h1 className="text-4xl md:text-5xl font-extrabold leading-tight tracking-tight">
-            <span className="text-brand-100">Taste the</span><br />
-            <span className="gradient-text">Season.</span>
+          {/* Eyebrow — small, subtle */}
+          <p className="text-xs font-medium tracking-[0.25em] uppercase"
+             style={{ color: 'rgba(251,191,36,0.55)' }}>
+            Ahmedabad · Farm Direct
+          </p>
+
+          {/* Main headline — large, fills the space */}
+          <h1 className="text-6xl sm:text-7xl md:text-8xl font-extrabold leading-[1.0] tracking-tight">
+            <span style={{ color: '#fef3c7' }}>What's </span>
+            <span className="gradient-text">ripe</span>
+            <br />
+            <span style={{ color: '#fef3c7' }}>today?</span>
           </h1>
+
+          {/* Subtext — soft invitation */}
+          <p className="text-sm font-normal mt-1"
+             style={{ color: 'rgba(254,243,199,0.4)' }}>
+            Scroll to find out
+          </p>
         </div>
 
         {/* Scroll cue — bouncing chevron, fades out earliest */}
@@ -767,10 +647,25 @@ function HomeView({ setView, onAddToCart, cart, onProductClick }) {
             pointerEvents: "none",
           }}
         />
-      </section>
+        </section>
+      </div>
+
+      {/* ── Products & Content — reveal with blur + translate ── */}
+      <section
+        ref={productsSectionRef}
+        style={{
+          position: 'relative',
+          zIndex: 2,
+          opacity: productOpacity,
+          filter: `blur(${productBlur}px)`,
+          transform: `translateY(${productTranslateY}px)`,
+          willChange: 'transform, opacity, filter',
+          pointerEvents: productT > 0.1 ? 'auto' : 'none',
+        }}
+      >
 
       {/* Our Picks – curated 6 products */}
-      <section ref={productsSectionRef} className="pb-16">
+      <section className="pb-16">
         <div className="max-w-6xl mx-auto px-8">
           <div className="flex items-center justify-between mb-6 animate-fade-in-up" style={{ animationDelay: "0.15s" }}>
             <div>
@@ -783,9 +678,24 @@ function HomeView({ setView, onAddToCart, cart, onProductClick }) {
               See all <ChevronRight className="w-3.5 h-3.5" />
             </button>
           </div>
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-5 stagger-children">
-            {HOME_PICKS.map((product) => (
-              <div key={product.id} className="product-card glass-light rounded-2xl overflow-hidden group">
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-5">
+            {HOME_PICKS.map((product, index) => {
+              const cardStart = 0.60 + index * 0.04;
+              const cardEnd   = cardStart + 0.25;
+              const cardT     = clamp((progress - cardStart) / (cardEnd - cardStart), 0, 1);
+              const cardEased = cardT < 0.5 ? 2*cardT*cardT : -1+(4-2*cardT)*cardT;
+              return (
+              <div
+                key={product.id}
+                className="product-card glass-light rounded-2xl overflow-hidden group"
+                style={{
+                  opacity: cardEased,
+                  filter: `blur(${lerp(20, 0, cardEased)}px)`,
+                  transform: `translateY(${lerp(40, 0, cardEased)}px)`,
+                  transition: 'none',
+                  willChange: 'transform, opacity, filter',
+                }}
+              >
                 {/* Image */}
                 <button
                   className="relative w-full h-40 overflow-hidden bg-surface/30 block cursor-pointer"
@@ -817,17 +727,15 @@ function HomeView({ setView, onAddToCart, cart, onProductClick }) {
                   </div>
                   <button
                     id={`home-add-to-cart-${product.id}`}
-                    onClick={() => onAddToCart(product)}
-                    className={`w-full py-2.5 rounded-xl text-xs font-semibold transition-all duration-300 btn-shimmer ${isInCart(product.id)
-                        ? "bg-brand-500/10 text-brand-400 border border-brand-500/20"
-                        : "bg-linear-to-r from-brand-500 to-brand-600 text-surface shadow-md shadow-brand-500/20 hover:shadow-brand-500/35"
-                      }`}
+                    onClick={() => onProductClick(product)}
+                    className="w-full py-2.5 rounded-xl text-xs font-semibold transition-all duration-300 btn-shimmer bg-linear-to-r from-brand-500 to-brand-600 text-surface shadow-md shadow-brand-500/20 hover:shadow-brand-500/35"
                   >
-                    {isInCart(product.id) ? "✓ Added" : "Add to Cart"}
+                    View Details
                   </button>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </section>
@@ -1124,6 +1032,7 @@ function HomeView({ setView, onAddToCart, cart, onProductClick }) {
           </div>
         </div>
       </footer>
+      </section>{/* end products reveal wrapper */}
     </div>
   );
 }
@@ -2242,20 +2151,20 @@ export default function App() {
         view={view}
         setView={handleSetView}
         cartCount={cartCount}
-        onCartOpen={() => setCartOpen(true)}
-        onSearchOpen={() => setSearchOpen(true)}
+        onCartOpen={() => { setCartOpen(true); lenis.stop(); }}
+        onSearchOpen={() => { setSearchOpen(true); lenis.stop(); }}
       />
 
       <SearchModal
         open={searchOpen}
-        onClose={() => setSearchOpen(false)}
+        onClose={() => { setSearchOpen(false); lenis.start(); }}
         products={PRODUCTS}
         onAddToCart={addToCart}
       />
 
       <CartDrawer
         open={cartOpen}
-        onClose={() => setCartOpen(false)}
+        onClose={() => { setCartOpen(false); lenis.start(); }}
         cart={cart}
         onUpdateQty={updateQty}
         onRemove={removeFromCart}

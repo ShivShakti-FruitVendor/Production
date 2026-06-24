@@ -40,6 +40,33 @@
   --animate-pulse-soft:      pulse-soft 2s ease-in-out infinite;
 }
 
+/* ──── Lenis recommended base styles ──── */
+html.lenis,
+html.lenis body {
+  height: auto;
+}
+
+.lenis.lenis-smooth {
+  scroll-behavior: auto !important;
+}
+
+.lenis.lenis-smooth [data-lenis-prevent] {
+  overscroll-behavior: contain;
+}
+
+.lenis.lenis-stopped {
+  overflow: hidden;
+}
+
+.lenis.lenis-smooth iframe {
+  pointer-events: none;
+}
+
+/* ──── Sticky hero scroll container ──── */
+.hero-scroll-container {
+  overflow: visible;
+}
+
 /* ──── Keyframes ──── */
 @keyframes float-slow {
   0%, 100% { transform: translateY(0px); }
@@ -104,7 +131,6 @@
   *, *::before, *::after { box-sizing: border-box; }
 
   html {
-    scroll-behavior: smooth;
     height: -webkit-fill-available;
   }
 
@@ -197,6 +223,7 @@ body::after {
 .stagger-children > *:nth-child(6) { animation-delay: 0.30s; }
 .stagger-children > *:nth-child(7) { animation-delay: 0.35s; }
 .stagger-children > *:nth-child(8) { animation-delay: 0.40s; }
+
 
 /* ──── Product card hover ──── */
 .product-card {
